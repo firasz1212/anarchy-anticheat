@@ -24,7 +24,8 @@ server_scripts {
     '@oxmysql/lib/MySQL.lua',
     'utils/logger.lua',
     'server/anticheat_server.lua',
-    'server/anticheat_txadmin.lua'
+    'server/anticheat_txadmin.lua',
+    'setup.lua'
 }
 
 -- Client files

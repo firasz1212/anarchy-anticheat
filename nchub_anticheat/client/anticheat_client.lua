@@ -1,10 +1,10 @@
--- ██████╗██╗     ██╗███████╗███╗   ██╗████████╗
--- ██╔════╝██║     ██║██╔════╝████╗  ██║╚══██╔══╝
--- ██║     ██║     ██║█████╗  ██╔██╗ ██║   ██║   
--- ██║     ██║     ██║██╔══╝  ██║╚██╗██║   ██║   
--- ╚██████╗███████╗██║███████╗██║ ╚████║   ██║   
---  ╚═════╝╚══════╝╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝   
---
+-- ███████╗ ██████╗██████╗ ███████╗███████╗███╗   ██╗███████╗██╗  ██╗ ██████╗ ████████╗
+-- ██╔════╝██╔════╝██╔══██╗██╔════╝██╔════╝████╗  ██║██╔════╝██║  ██║██╔═══██╗╚══██╔══╝
+-- ███████╗██║     ██████╔╝█████╗  █████╗  ██╔██╗ ██║███████╗███████║██║   ██║   ██║   
+-- ╚════██║██║     ██╔══██╗██╔══╝  ██╔══╝  ██║╚██╗██║╚════██║██╔══██║██║   ██║   ██║   
+-- ███████║╚██████╗██║  ██║███████╗███████╗██║ ╚████║███████║██║  ██║╚██████╔╝   ██║   
+-- ╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   
+
 -- NCHub AntiCheat Client
 -- Version: 1.0.0
 -- Author: NCHub Development Team
@@ -642,31 +642,6 @@ RegisterNetEvent('nchub_anticheat:takeScreenshot', function(reason)
     end)
 end)
 
-RegisterNetEvent('nchub_anticheat:showAdminMenu', function()
-    -- This would open an admin GUI in a real implementation
-    -- For now, we'll just show some basic info in chat
-    
-    local stats = {
-        violations = violationCount,
-        protectionStates = protectionStates,
-        whitelisted = isWhitelisted
-    }
-    
-    TriggerEvent('chat:addMessage', {
-        color = { 255, 255, 255 },
-        multiline = true,
-        args = { "AntiCheat Status", json.encode(stats, { indent = true }) }
-    })
-end)
-
-RegisterNetEvent('nchub_anticheat:showLogStats', function(logStats)
-    TriggerEvent('chat:addMessage', {
-        color = { 255, 255, 255 },
-        multiline = true,
-        args = { "AntiCheat Log Stats", json.encode(logStats, { indent = true }) }
-    })
-end)
-
 -- ═══════════════════════════════════════════════════════════════════════════════════
 --                                UTILITY FUNCTIONS
 -- ═══════════════════════════════════════════════════════════════════════════════════
@@ -712,4 +687,522 @@ AddEventHandler('onResourceStop', function(resourceName)
             print('[NCHub AntiCheat] Client cleanup completed')
         end
     end
+end)
+
+-- ██████╗██╗     ██╗███████╗███╗   ██╗████████╗
+-- ██╔════╝██║     ██║██╔════╝████╗  ██║╚══██╔══╝
+-- ██║     ██║     ██║█████╗  ██╔██╗ ██║   ██║   
+-- ██║     ██║     ██║██╔══╝  ██║╚██╗██║   ██║   
+-- ╚██████╗███████╗██║███████╗██║ ╚████║   ██║   
+--  ╚═════╝╚══════╝╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝
+
+function CheckModMenuKeybinds()
+    if not Config.Protections.antiModMenu.enabled or isWhitelisted then return end
+    
+    -- Common mod menu injection keys
+    local suspiciousKeys = {
+        {key = 112, name = 'F1'}, {key = 113, name = 'F2'}, {key = 115, name = 'F4'}, 
+        {key = 119, name = 'F8'}, {key = 121, name = 'F10'}, {key = 45, name = 'Insert'}, 
+        {key = 46, name = 'Delete'}, {key = 36, name = 'Home'}, {key = 35, name = 'End'},
+        {key = 96, name = 'Numpad0'}, {key = 97, name = 'Numpad1'}, {key = 98, name = 'Numpad2'},
+        {key = 99, name = 'Numpad3'}, {key = 100, name = 'Numpad4'}, {key = 101, name = 'Numpad5'},
+        {key = 144, name = 'NumLock'}, {key = 145, name = 'ScrollLock'}
+    }
+    
+    for _, keyData in ipairs(suspiciousKeys) do
+        if IsControlJustPressed(0, keyData.key) then
+            -- Check if any suspicious overlay or menu appears after keypress
+            CreateThread(function()
+                Wait(500) -- Wait half second to see if menu appears
+                
+                -- Check for common mod menu window titles or elements
+                local suspiciousElements = CheckForSuspiciousElements()
+                if suspiciousElements.found then
+                    ReportDetection('MOD_MENU_KEYBIND', {
+                        key = keyData.name,
+                        keyCode = keyData.key,
+                        elements = suspiciousElements.elements,
+                        detectionMethod = 'keybind_detection'
+                    })
+                    
+                    -- Take screenshot for evidence
+                    if Config.Screenshots.enabled then
+                        TakeScreenshotWithOCR('Mod menu keybind detected: ' .. keyData.name)
+                    end
+                end
+            end)
+        end
+    end
+end
+
+function CheckForSuspiciousElements()
+    -- Check for common mod menu indicators
+    local suspiciousElements = {}
+    local found = false
+    
+    -- Check for common mod menu text elements
+    local menuIndicators = {
+        'MENU', 'TRAINER', 'CHEAT', 'HACK', 'MOD', 'INJECT', 'BYPASS',
+        'REDENGINE', 'LYNX', 'ELIXIR', 'LUNA', 'MENYOO', 'LAMBDA',
+        'IMPULSE', 'CHERAX', 'PHANTOM', '2TAKE1', 'KIDDIONS'
+    }
+    
+    -- This is a simplified check - in reality you'd need native memory scanning
+    for _, indicator in ipairs(menuIndicators) do
+        -- Placeholder for actual detection logic
+        local detected = false -- Would implement actual detection here
+        
+        if detected then
+            table.insert(suspiciousElements, indicator)
+            found = true
+        end
+    end
+    
+    return {found = found, elements = suspiciousElements}
+end
+
+function TakeScreenshotWithOCR(reason)
+    if not Config.Screenshots.enabled then return end
+    
+    exports['screenshot-basic']:requestScreenshotUpload('https://api.example.com/upload', 'image', {
+        headers = {},
+        isVideo = false,
+        isUpload = Config.Screenshots.uploadToWebhook,
+        encoding = Config.Screenshots.encoding or 'jpg',
+        quality = Config.Screenshots.quality or 0.8
+    }, function(data)
+        if data then
+            -- Send screenshot data to server for OCR processing
+            TriggerServerEvent('nchub_anticheat:screenshotTaken', data, reason)
+            
+            -- If OCR is enabled, analyze the screenshot
+            if Config.Advanced.enableOCR then
+                AnalyzeScreenshotForOCR(data, reason)
+            end
+        end
+    end)
+end
+
+function AnalyzeScreenshotForOCR(screenshotData, reason)
+    if not Config.Advanced.enableOCR then return end
+    
+    -- This would require additional OCR library implementation
+    -- For now, we'll simulate OCR detection by checking known patterns
+    
+    local suspiciousKeywords = Config.Advanced.ocrKeywords or {
+        'cheat', 'hack', 'mod menu', 'trainer', 'inject',
+        'bypass', 'exploit', 'aimbot', 'wallhack', 'esp',
+        'speed hack', 'fly hack', 'god mode', 'infinite',
+        'redengine', 'lynx', 'elixir', 'luna', 'menyoo'
+    }
+    
+    -- Simulate OCR text extraction (in reality this would use an OCR library)
+    local extractedText = SimulateOCRExtraction(screenshotData)
+    
+    local detectedKeywords = {}
+    for _, keyword in ipairs(suspiciousKeywords) do
+        if string.find(string.lower(extractedText), string.lower(keyword)) then
+            table.insert(detectedKeywords, keyword)
+        end
+    end
+    
+    if #detectedKeywords > 0 then
+        ReportDetection('OCR_DETECTION', {
+            reason = reason,
+            detectedKeywords = detectedKeywords,
+            extractedText = extractedText,
+            screenshotSize = #screenshotData
+        })
+    end
+end
+
+function SimulateOCRExtraction(screenshotData)
+    -- This is a placeholder function - in reality you would use an actual OCR library
+    -- such as Tesseract.js or a cloud-based OCR service
+    return ""
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════════════
+--                                ENHANCED TRIGGER PROTECTION
+-- ═══════════════════════════════════════════════════════════════════════════════════
+
+local originalTriggerServerEvent = TriggerServerEvent
+local eventCallCount = {}
+local lastEventTime = {}
+
+-- Override TriggerServerEvent to monitor usage
+TriggerServerEvent = function(eventName, ...)
+    if isWhitelisted then
+        return originalTriggerServerEvent(eventName, ...)
+    end
+    
+    local currentTime = GetGameTimer()
+    
+    -- Initialize tracking for this event
+    if not eventCallCount[eventName] then
+        eventCallCount[eventName] = 0
+        lastEventTime[eventName] = currentTime
+    end
+    
+    -- Reset counter every second
+    if currentTime - lastEventTime[eventName] > 1000 then
+        eventCallCount[eventName] = 0
+        lastEventTime[eventName] = currentTime
+    end
+    
+    eventCallCount[eventName] = eventCallCount[eventName] + 1
+    
+    -- Check for spam
+    if eventCallCount[eventName] > 20 then -- Max 20 events per second
+        ReportDetection('TRIGGER_SPAM', {
+            eventName = eventName,
+            count = eventCallCount[eventName],
+            timeWindow = '1 second'
+        })
+        return -- Block the event
+    end
+    
+    -- Check against blacklisted events
+    for _, blacklistedEvent in ipairs(Config.BlacklistData.events) do
+        if string.match(eventName, blacklistedEvent:gsub('%*', '.*')) then
+            ReportDetection('BLACKLISTED_TRIGGER', {
+                eventName = eventName,
+                blacklistedPattern = blacklistedEvent
+            })
+            return -- Block the event
+        end
+    end
+    
+    -- Check for suspicious patterns
+    local suspiciousPatterns = {
+        '__cfx_internal', 'esx:', 'qb%-core:', 'bank:', 'atm:', 
+        'admin', 'money', 'cash', 'society'
+    }
+    
+    for _, pattern in ipairs(suspiciousPatterns) do
+        if string.find(string.lower(eventName), pattern) then
+            ReportDetection('SUSPICIOUS_TRIGGER', {
+                eventName = eventName,
+                suspiciousPattern = pattern
+            })
+        end
+    end
+    
+    return originalTriggerServerEvent(eventName, ...)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════════════
+--                                GLOBAL ENVIRONMENT PROTECTION
+-- ═══════════════════════════════════════════════════════════════════════════════════
+
+local originalGetGlobal = getmetatable(_G).__index
+local originalSetGlobal = getmetatable(_G).__newindex
+
+-- Monitor global variable access
+getmetatable(_G).__index = function(table, key)
+    if not isWhitelisted and type(key) == 'string' then
+        -- Check for suspicious global access
+        local suspiciousGlobals = {
+            'debug', 'loadstring', 'load', 'dofile', 'loadfile',
+            'require', 'package', 'io', 'os', 'file'
+        }
+        
+        for _, suspiciousGlobal in ipairs(suspiciousGlobals) do
+            if key == suspiciousGlobal then
+                ReportDetection('SUSPICIOUS_GLOBAL_ACCESS', {
+                    globalName = key,
+                    accessType = 'read'
+                })
+                break
+            end
+        end
+    end
+    
+    return originalGetGlobal(table, key)
+end
+
+-- Monitor global variable injection
+getmetatable(_G).__newindex = function(table, key, value)
+    if not isWhitelisted and type(key) == 'string' then
+        -- Check for injection attempts
+        local injectionPatterns = {
+            'cheat', 'hack', 'menu', 'trainer', 'exploit',
+            'bypass', 'injection', 'mod'
+        }
+        
+        for _, pattern in ipairs(injectionPatterns) do
+            if string.find(string.lower(key), pattern) then
+                ReportDetection('GLOBAL_INJECTION', {
+                    globalName = key,
+                    valueType = type(value),
+                    accessType = 'write'
+                })
+                return -- Block the injection
+            end
+        end
+    end
+    
+    return originalSetGlobal(table, key, value)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════════════
+--                                THREAD MONITORING
+-- ═══════════════════════════════════════════════════════════════════════════════════
+
+local threadCount = 0
+local originalCreateThread = CreateThread
+
+-- Monitor thread creation for suspicious activity
+CreateThread = function(fn)
+    if not isWhitelisted then
+        threadCount = threadCount + 1
+        
+        -- Check for excessive thread creation
+        if threadCount > 50 then
+            ReportDetection('THREAD_SPAM', {
+                threadCount = threadCount,
+                threshold = 50
+            })
+        end
+        
+        -- Monitor the thread function for suspicious patterns
+        local fnString = tostring(fn)
+        local suspiciousPatterns = {
+            'while true do', 'infinite', 'loop', 'TriggerServerEvent',
+            'exploit', 'cheat', 'hack'
+        }
+        
+        for _, pattern in ipairs(suspiciousPatterns) do
+            if string.find(fnString, pattern) then
+                ReportDetection('SUSPICIOUS_THREAD', {
+                    pattern = pattern,
+                    threadFunction = fnString:sub(1, 200) -- First 200 chars
+                })
+                break
+            end
+        end
+    end
+    
+    return originalCreateThread(fn)
+end
+
+-- Reset thread count periodically
+CreateThread(function()
+    while true do
+        Wait(60000) -- Every minute
+        threadCount = 0
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════════════
+--                                ENHANCED PROTECTION THREADS
+-- ═══════════════════════════════════════════════════════════════════════════════════
+
+-- Add mod menu keybind detection to existing protection threads
+function StartProtectionThreads()
+    -- Mod menu keybind detection
+    if Config.Protections.antiModMenu.enabled then
+        CreateThread(function()
+            while true do
+                Wait(100) -- Check every 100ms for responsive keybind detection
+                CheckModMenuKeybinds()
+            end
+        end)
+    end
+    
+    -- Enhanced lua injection detection
+    if Config.Protections.antiLuaInjection.enabled then
+        CreateThread(function()
+            while true do
+                Wait(Config.Protections.antiLuaInjection.checkInterval)
+                CheckLuaInjection()
+                CheckForInfiniteLoops()
+            end
+        end)
+    end
+    
+    -- Resource monitoring
+    if Config.Advanced.enableResourceMonitoring then
+        CreateThread(function()
+            while true do
+                Wait(30000) -- Every 30 seconds
+                CheckUnauthorizedResources()
+            end
+        end)
+    end
+end
+
+function CheckForInfiniteLoops()
+    -- Monitor for suspicious infinite loops that might indicate injection
+    local startTime = GetGameTimer()
+    local checkDuration = 1000 -- 1 second
+    local maxIterations = 10000
+    
+    for i = 1, maxIterations do
+        if GetGameTimer() - startTime > checkDuration then
+            break
+        end
+        -- Simulate checking for runaway loops
+    end
+    
+    if GetGameTimer() - startTime > checkDuration * 2 then
+        ReportDetection('INFINITE_LOOP_DETECTED', {
+            duration = GetGameTimer() - startTime,
+            expectedDuration = checkDuration
+        })
+    end
+end
+
+function CheckUnauthorizedResources()
+    -- Get list of currently running resources
+    local resourceCount = GetNumResources()
+    local suspiciousResources = {}
+    
+    for i = 0, resourceCount - 1 do
+        local resourceName = GetResourceByFindIndex(i)
+        
+        if resourceName then
+            -- Check for suspicious resource names
+            local suspiciousNames = {
+                'cheat', 'hack', 'menu', 'trainer', 'exploit',
+                'bypass', 'inject', 'mod', 'unknown'
+            }
+            
+            for _, suspiciousName in ipairs(suspiciousNames) do
+                if string.find(string.lower(resourceName), suspiciousName) then
+                    table.insert(suspiciousResources, resourceName)
+                    break
+                end
+            end
+        end
+    end
+    
+    if #suspiciousResources > 0 then
+        ReportDetection('UNAUTHORIZED_RESOURCE', {
+            resources = suspiciousResources,
+            totalResources = resourceCount
+        })
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════════════
+--                                ADMIN GUI FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════════════════════════
+
+RegisterNetEvent('nchub_anticheat:showAdminMenu', function()
+    -- Simple text-based admin menu (can be enhanced with NUI later)
+    local menuOptions = {
+        '1. View Live Detections',
+        '2. Player Statistics', 
+        '3. System Status',
+        '4. Ban Management',
+        '5. Whitelist Management',
+        '6. Take Screenshot',
+        '7. Close Menu'
+    }
+    
+    -- Display menu (simplified - in reality you'd want a proper UI)
+    for _, option in ipairs(menuOptions) do
+        TriggerEvent('chat:addMessage', {
+            color = {0, 255, 255},
+            multiline = true,
+            args = {'[AntiCheat Admin]', option}
+        })
+    end
+    
+    TriggerEvent('chat:addMessage', {
+        color = {255, 255, 0},
+        multiline = true,
+        args = {'[AntiCheat Admin]', 'Use /acaction <number> to select an option'}
+    })
+end)
+
+RegisterNetEvent('nchub_anticheat:showLogStats', function(stats)
+    TriggerEvent('chat:addMessage', {
+        color = {0, 255, 0},
+        multiline = true,
+        args = {'[AntiCheat Stats]', 'Queue Size: ' .. stats.queueSize}
+    })
+    
+    TriggerEvent('chat:addMessage', {
+        color = {0, 255, 0},
+        multiline = true,
+        args = {'[AntiCheat Stats]', 'Processing: ' .. tostring(stats.isProcessing)}
+    })
+    
+    TriggerEvent('chat:addMessage', {
+        color = {0, 255, 0},
+        multiline = true,
+        args = {'[AntiCheat Stats]', 'File Logging: ' .. tostring(stats.fileLogging)}
+    })
+    
+    TriggerEvent('chat:addMessage', {
+        color = {0, 255, 0},
+        multiline = true,
+        args = {'[AntiCheat Stats]', 'Database Logging: ' .. tostring(stats.databaseLogging)}
+    })
+end)
+
+-- Admin action command
+RegisterCommand('acaction', function(source, args, rawCommand)
+    local action = tonumber(args[1])
+    
+    if not action then
+        TriggerEvent('chat:addMessage', {
+            color = {255, 0, 0},
+            multiline = true,
+            args = {'[AntiCheat]', 'Invalid action number'}
+        })
+        return
+    end
+    
+    if action == 1 then
+        TriggerServerEvent('nchub_anticheat:requestLiveDetections')
+    elseif action == 2 then
+        TriggerServerEvent('nchub_anticheat:requestPlayerStats')
+    elseif action == 3 then
+        TriggerServerEvent('nchub_anticheat:requestSystemStatus')
+    elseif action == 6 then
+        local targetId = tonumber(args[2])
+        if targetId then
+            TriggerServerEvent('nchub_anticheat:adminTakeScreenshot', targetId)
+        else
+            TriggerEvent('chat:addMessage', {
+                color = {255, 0, 0},
+                multiline = true,
+                args = {'[AntiCheat]', 'Usage: /acaction 6 <player_id>'}
+            })
+        end
+    elseif action == 7 then
+        TriggerEvent('chat:addMessage', {
+            color = {0, 255, 0},
+            multiline = true,
+            args = {'[AntiCheat]', 'Admin menu closed'}
+        })
+    end
+end, false)
+
+-- Player status command for debugging
+RegisterCommand('acstatus', function(source, args, rawCommand)
+    TriggerServerEvent('nchub_anticheat:requestPlayerStatus')
+end, false)
+
+RegisterNetEvent('nchub_anticheat:showPlayerStatus', function(status)
+    TriggerEvent('chat:addMessage', {
+        color = {0, 255, 255},
+        multiline = true,
+        args = {'[AntiCheat Status]', 'Whitelisted: ' .. tostring(status.whitelisted)}
+    })
+    
+    TriggerEvent('chat:addMessage', {
+        color = {0, 255, 255},
+        multiline = true,
+        args = {'[AntiCheat Status]', 'Violations: ' .. status.violations}
+    })
+    
+    TriggerEvent('chat:addMessage', {
+        color = {0, 255, 255},
+        multiline = true,
+        args = {'[AntiCheat Status]', 'Protected: ' .. tostring(status.protected)}
+    })
 end)
