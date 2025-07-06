@@ -560,7 +560,7 @@ RegisterNetEvent('nchub_anticheat:detectionReport', function(detectionType, data
     Logger.LogDetection(src, detectionType, reason, details, actionTaken, severityLevel)
 end)
 
-RegisterNetEvent('nchub_anticheat:screenshotTaken', function(screenshotData)
+RegisterNetEvent('nchub_anticheat:screenshotTaken', function(screenshotData, reason)
     local src = source
     
     if Config.Screenshots.uploadToWebhook and Config.Screenshots.webhookUrl then
@@ -570,21 +570,138 @@ RegisterNetEvent('nchub_anticheat:screenshotTaken', function(screenshotData)
             content = 'Screenshot from player: ' .. GetPlayerName(src),
             embeds = {{
                 title = '📸 AntiCheat Screenshot',
-                description = 'Screenshot taken during detection',
+                description = 'Screenshot taken during detection: ' .. (reason or 'Unknown'),
                 color = 16711680,
                 image = {
                     url = 'attachment://screenshot.jpg'
+                },
+                fields = {
+                    {
+                        name = '👤 Player',
+                        value = GetPlayerName(src),
+                        inline = true
+                    },
+                    {
+                        name = '🆔 Server ID',
+                        value = tostring(src),
+                        inline = true
+                    },
+                    {
+                        name = '📊 Detection Reason',
+                        value = reason or 'Manual Screenshot',
+                        inline = false
+                    }
                 },
                 timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ')
             }}
         }
         
-        -- This would require additional implementation for file uploads
-        -- For now, we'll just log that a screenshot was taken
-        Logger.LogSystemAlert('Screenshot taken for player: ' .. GetPlayerName(src), {
-            screenshotSize = #screenshotData
-        }, 1)
+        -- Process OCR if enabled
+        if Config.Advanced.enableOCR then
+            local ocrResult = ProcessScreenshotOCR(screenshotData, src)
+            if ocrResult.suspicious then
+                payload.embeds[1].fields[#payload.embeds[1].fields + 1] = {
+                    name = '🔍 OCR Detection',
+                    value = 'Suspicious keywords found: ' .. table.concat(ocrResult.keywords, ', '),
+                    inline = false
+                }
+                
+                -- Log OCR detection
+                Logger.LogDetection(src, 'OCR_SCREENSHOT_DETECTION', 'Suspicious content detected in screenshot', {
+                    keywords = ocrResult.keywords,
+                    extractedText = ocrResult.text,
+                    screenshotReason = reason
+                }, 'logged', 3)
+                
+                -- Auto-ban if configured
+                if #ocrResult.keywords >= 3 then -- If 3+ suspicious keywords found
+                    BanPlayer(src, 'OCR Detection: Multiple cheat indicators found in screenshot', 'AntiCheat OCR System')
+                end
+            end
+        end
+        
+        -- Send to Discord (simplified - would need actual file upload implementation)
+        Logger.LogSystemAlert('Screenshot captured and processed for player: ' .. GetPlayerName(src), {
+            screenshotSize = #screenshotData,
+            reason = reason,
+            ocrEnabled = Config.Advanced.enableOCR
+        }, 2)
     end
+end)
+
+-- Enhanced detection handlers for new detection types
+RegisterNetEvent('nchub_anticheat:detectionReport', function(detectionType, data)
+    local src = source
+    
+    if IsPlayerWhitelisted(src) then return end
+    
+    local playerName = GetPlayerName(src)
+    local reason = ''
+    local details = data or {}
+    local severityLevel = 2
+    local actionTaken = 'logged'
+    
+    -- Handle existing detection types... (keeping existing code)
+    
+    -- Add new detection type handlers
+    if detectionType == 'MOD_MENU_KEYBIND' then
+        reason = 'Mod menu keybind detected: ' .. (data.key or 'unknown key')
+        severityLevel = 4
+        if Config.Protections.antiModMenu.banOnDetection then
+            BanPlayer(src, reason, 'AntiCheat System')
+            actionTaken = 'banned'
+        end
+        
+    elseif detectionType == 'OCR_DETECTION' then
+        reason = 'OCR detected suspicious content: ' .. table.concat(data.detectedKeywords or {}, ', ')
+        severityLevel = 4
+        actionTaken = 'flagged'
+        
+    elseif detectionType == 'TRIGGER_SPAM' then
+        reason = 'Event trigger spam detected: ' .. (data.eventName or 'unknown event')
+        severityLevel = 3
+        if Config.Protections.eventProtection.banOnDetection then
+            BanPlayer(src, reason, 'AntiCheat System')
+            actionTaken = 'banned'
+        end
+        
+    elseif detectionType == 'BLACKLISTED_TRIGGER' then
+        reason = 'Blacklisted event usage: ' .. (data.eventName or 'unknown event')
+        severityLevel = 4
+        if Config.Protections.eventProtection.banOnDetection then
+            BanPlayer(src, reason, 'AntiCheat System')
+            actionTaken = 'banned'
+        end
+        
+    elseif detectionType == 'GLOBAL_INJECTION' then
+        reason = 'Global variable injection detected: ' .. (data.globalName or 'unknown')
+        severityLevel = 4
+        if Config.Protections.antiLuaInjection.banOnDetection then
+            BanPlayer(src, reason, 'AntiCheat System')
+            actionTaken = 'banned'
+        end
+        
+    elseif detectionType == 'THREAD_SPAM' then
+        reason = 'Thread creation spam detected'
+        severityLevel = 3
+        AddViolation(src, reason, details, severityLevel)
+        
+    elseif detectionType == 'UNAUTHORIZED_RESOURCE' then
+        reason = 'Unauthorized resource detected: ' .. table.concat(data.resources or {}, ', ')
+        severityLevel = 4
+        if Config.Protections.antiLuaInjection.banOnDetection then
+            BanPlayer(src, reason, 'AntiCheat System')
+            actionTaken = 'banned'
+        end
+    end
+    
+    -- Take screenshot for high severity detections
+    if severityLevel >= 3 and Config.Screenshots.onDetection then
+        TakeScreenshot(src, reason)
+    end
+    
+    -- Log the detection
+    Logger.LogDetection(src, detectionType, reason, details, actionTaken, severityLevel)
 end)
 
 -- ═══════════════════════════════════════════════════════════════════════════════════
@@ -758,6 +875,241 @@ function InitializeAdminCommands()
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════════════
+--                                ADMIN EVENT HANDLERS
+-- ═══════════════════════════════════════════════════════════════════════════════════
+
+RegisterNetEvent('nchub_anticheat:requestPlayerStatus', function()
+    local src = source
+    
+    local status = {
+        whitelisted = IsPlayerWhitelisted(src),
+        violations = playerViolations[src] or 0,
+        protected = true
+    }
+    
+    TriggerClientEvent('nchub_anticheat:showPlayerStatus', src, status)
+end)
+
+RegisterNetEvent('nchub_anticheat:requestLiveDetections', function()
+    local src = source
+    
+    if not IsPlayerAdmin(src, 1) then
+        TriggerClientEvent('QBCore:Notify', src, Config.Messages.noPermission, 'error')
+        return
+    end
+    
+    -- Get recent detections from database
+    if Config.Database.useMySQL then
+        MySQL.Async.fetchAll('SELECT * FROM ' .. Config.Database.logsTable .. ' WHERE timestamp >= DATE_SUB(NOW(), INTERVAL 1 HOUR) ORDER BY timestamp DESC LIMIT 10', {}, function(result)
+            if result then
+                for _, detection in ipairs(result) do
+                    TriggerClientEvent('chat:addMessage', src, {
+                        color = {255, 165, 0},
+                        multiline = true,
+                        args = {'[Recent Detection]', string.format('%s - %s: %s', 
+                            detection.timestamp, 
+                            detection.player_name, 
+                            detection.detection_reason)}
+                    })
+                end
+            else
+                TriggerClientEvent('chat:addMessage', src, {
+                    color = {255, 255, 0},
+                    multiline = true,
+                    args = {'[AntiCheat]', 'No recent detections found'}
+                })
+            end
+        end)
+    end
+end)
+
+RegisterNetEvent('nchub_anticheat:requestPlayerStats', function()
+    local src = source
+    
+    if not IsPlayerAdmin(src, 1) then
+        TriggerClientEvent('QBCore:Notify', src, Config.Messages.noPermission, 'error')
+        return
+    end
+    
+    local totalPlayers = #GetPlayers()
+    local totalViolations = 0
+    local whitelistedCount = 0
+    
+    for playerId, violations in pairs(playerViolations) do
+        totalViolations = totalViolations + violations
+    end
+    
+    for identifier, _ in pairs(whitelistedPlayers) do
+        whitelistedCount = whitelistedCount + 1
+    end
+    
+    TriggerClientEvent('chat:addMessage', src, {
+        color = {0, 255, 0},
+        multiline = true,
+        args = {'[Player Stats]', 'Total Players: ' .. totalPlayers}
+    })
+    
+    TriggerClientEvent('chat:addMessage', src, {
+        color = {0, 255, 0},
+        multiline = true,
+        args = {'[Player Stats]', 'Total Violations: ' .. totalViolations}
+    })
+    
+    TriggerClientEvent('chat:addMessage', src, {
+        color = {0, 255, 0},
+        multiline = true,
+        args = {'[Player Stats]', 'Whitelisted Players: ' .. whitelistedCount}
+    })
+end)
+
+RegisterNetEvent('nchub_anticheat:requestSystemStatus', function()
+    local src = source
+    
+    if not IsPlayerAdmin(src, 2) then
+        TriggerClientEvent('QBCore:Notify', src, Config.Messages.noPermission, 'error')
+        return
+    end
+    
+    local activeProtections = 0
+    for _, protection in pairs(Config.Protections) do
+        if protection.enabled then
+            activeProtections = activeProtections + 1
+        end
+    end
+    
+    local logStats = Logger.GetLogStats()
+    
+    TriggerClientEvent('chat:addMessage', src, {
+        color = {0, 255, 255},
+        multiline = true,
+        args = {'[System Status]', 'Active Protections: ' .. activeProtections}
+    })
+    
+    TriggerClientEvent('chat:addMessage', src, {
+        color = {0, 255, 255},
+        multiline = true,
+        args = {'[System Status]', 'Log Queue Size: ' .. logStats.queueSize}
+    })
+    
+    TriggerClientEvent('chat:addMessage', src, {
+        color = {0, 255, 255},
+        multiline = true,
+        args = {'[System Status]', 'Database Logging: ' .. tostring(logStats.databaseLogging)}
+    })
+    
+    TriggerClientEvent('chat:addMessage', src, {
+        color = {0, 255, 255},
+        multiline = true,
+        args = {'[System Status]', 'Discord Logging: ' .. tostring(logStats.discordLogging)}
+    })
+end)
+
+RegisterNetEvent('nchub_anticheat:adminTakeScreenshot', function(targetId)
+    local src = source
+    
+    if not IsPlayerAdmin(src, 2) then
+        TriggerClientEvent('QBCore:Notify', src, Config.Messages.noPermission, 'error')
+        return
+    end
+    
+    if not GetPlayerName(targetId) then
+        TriggerClientEvent('QBCore:Notify', src, Config.Messages.playerNotFound, 'error')
+        return
+    end
+    
+    TakeScreenshot(targetId, 'Admin requested screenshot by ' .. GetPlayerName(src))
+    TriggerClientEvent('QBCore:Notify', src, 'Screenshot request sent to player ' .. GetPlayerName(targetId), 'success')
+    
+    Logger.LogAdminAction(src, targetId, 'screenshot_request', 'Admin requested screenshot', {
+        adminName = GetPlayerName(src),
+        targetName = GetPlayerName(targetId)
+    })
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════════════
+--                                ADDITIONAL ADMIN COMMANDS
+-- ═══════════════════════════════════════════════════════════════════════════════════
+
+-- Whitelist management command
+RegisterCommand('acwhitelist', function(source, args, rawCommand)
+    local src = source
+    
+    if not IsPlayerAdmin(src, 3) then
+        TriggerClientEvent('QBCore:Notify', src, Config.Messages.noPermission, 'error')
+        return
+    end
+    
+    local action = args[1]
+    local identifier = args[2]
+    
+    if not action or not identifier then
+        TriggerClientEvent('QBCore:Notify', src, 'Usage: /acwhitelist <add/remove> <identifier>', 'error')
+        return
+    end
+    
+    if action == 'add' then
+        AddToWhitelist(identifier, GetPlayerName(src), 'Admin whitelist')
+        TriggerClientEvent('QBCore:Notify', src, 'Player added to whitelist: ' .. identifier, 'success')
+    elseif action == 'remove' then
+        RemoveFromWhitelist(identifier, GetPlayerName(src), 'Admin removal')
+        TriggerClientEvent('QBCore:Notify', src, 'Player removed from whitelist: ' .. identifier, 'success')
+    else
+        TriggerClientEvent('QBCore:Notify', src, 'Invalid action. Use add or remove.', 'error')
+    end
+end, false)
+
+function AddToWhitelist(identifier, addedBy, reason)
+    if not Config.Database.useMySQL then return false end
+    
+    MySQL.Async.insert('INSERT INTO ' .. Config.Database.whitelistTable .. ' (player_identifier, player_name, whitelist_type, permission_level, added_by, reason) VALUES (?, ?, ?, ?, ?, ?)', {
+        identifier,
+        'Manual Whitelist',
+        'trusted',
+        1,
+        addedBy or 'System',
+        reason or 'Manual whitelist'
+    }, function(insertId)
+        if insertId then
+            -- Add to local whitelist
+            whitelistedPlayers[identifier] = {
+                id = insertId,
+                player_identifier = identifier,
+                whitelist_type = 'trusted',
+                permission_level = 1,
+                is_active = 1
+            }
+            
+            Logger.LogSystemAlert('Player whitelisted: ' .. identifier, {
+                addedBy = addedBy,
+                reason = reason
+            }, 1)
+        end
+    end)
+    
+    return true
+end
+
+function RemoveFromWhitelist(identifier, removedBy, reason)
+    if not Config.Database.useMySQL then return false end
+    
+    MySQL.Async.execute('UPDATE ' .. Config.Database.whitelistTable .. ' SET is_active = 0 WHERE player_identifier = ?', {
+        identifier
+    }, function(affectedRows)
+        if affectedRows > 0 then
+            -- Remove from local whitelist
+            whitelistedPlayers[identifier] = nil
+            
+            Logger.LogSystemAlert('Player removed from whitelist: ' .. identifier, {
+                removedBy = removedBy,
+                reason = reason
+            }, 1)
+        end
+    end)
+    
+    return true
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════════════
 --                                EXPORTS
 -- ═══════════════════════════════════════════════════════════════════════════════════
 
@@ -782,3 +1134,51 @@ end)
 exports('getBanInfo', function(identifier)
     return bannedPlayers[identifier]
 end)
+
+-- ═══════════════════════════════════════════════════════════════════════════════════
+--                                OCR PROCESSING FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════════════════════════
+
+function ProcessScreenshotOCR(screenshotData, playerId)
+    if not Config.Advanced.enableOCR then
+        return { suspicious = false, keywords = {}, text = "" }
+    end
+    
+    -- This is a placeholder for actual OCR implementation
+    -- In a real implementation, you would:
+    -- 1. Save the screenshot temporarily
+    -- 2. Use an OCR library (like Tesseract) to extract text
+    -- 3. Analyze the text for suspicious keywords
+    -- 4. Clean up temporary files
+    
+    local extractedText = SimulateOCRProcessing(screenshotData)
+    local suspiciousKeywords = {}
+    
+    -- Check for suspicious keywords
+    for _, keyword in ipairs(Config.Advanced.ocrKeywords) do
+        if string.find(string.lower(extractedText), string.lower(keyword)) then
+            table.insert(suspiciousKeywords, keyword)
+        end
+    end
+    
+    return {
+        suspicious = #suspiciousKeywords > 0,
+        keywords = suspiciousKeywords,
+        text = extractedText
+    }
+end
+
+function SimulateOCRProcessing(screenshotData)
+    -- Placeholder for actual OCR processing
+    -- In reality, this would interface with an OCR service or library
+    
+    -- For demonstration, we'll return an empty string
+    -- In a real implementation, you might use:
+    -- - Cloud OCR services (Google Vision, AWS Textract, Azure Computer Vision)
+    -- - Local OCR libraries (Tesseract)
+    -- - Custom OCR solutions
+    
+    return ""
+end
+
+-- Enhanced detection handlers for new detection types
